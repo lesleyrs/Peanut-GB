@@ -7,9 +7,10 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
-
-#include "SDL.h"
+#include <js/glue.h>
+#include <js/dom_pk_codes.h>
 
 #if defined(ENABLE_SOUND_BLARGG)
 #	include "blargg_apu/audio.h"
@@ -22,15 +23,8 @@ void audio_write(uint16_t addr, uint8_t val);
 
 #include "../../peanut_gb.h"
 
-enum {
-	LOG_CATERGORY_PEANUTSDL = SDL_LOG_CATEGORY_CUSTOM
-};
-
 struct priv_t
 {
-	/* Window context used to generate message boxes. */
-	SDL_Window *win;
-
 	/* Pointer to allocated memory holding GB file. */
 	uint8_t *rom;
 	/* Pointer to allocated memory holding save file. */
@@ -46,6 +40,19 @@ struct priv_t
 };
 
 static struct minigb_apu_ctx apu;
+
+uint8_t *load_file(const char* file, size_t *datasize);
+static bool onkey(void *userdata, bool pressed, int key, int code, int modifiers);
+static bool quit = false;
+uint32_t pixels[LCD_WIDTH * LCD_HEIGHT];
+static unsigned int fast_mode = 1;
+static unsigned int dump_bmp = 0;
+static unsigned int selected_palette = 3;
+struct priv_t priv =
+{
+	.rom = NULL,
+	.cart_ram = NULL
+};
 
 /**
  * Returns a byte from the ROM file at the given address.
@@ -99,7 +106,7 @@ void audio_callback(void *ptr, uint8_t *data, int len)
 void read_cart_ram_file(const char *save_file_name, uint8_t **dest,
 			const size_t len)
 {
-	SDL_RWops *f;
+	FILE *f;
 
 	/* If save file not required. */
 	if(len == 0)
@@ -109,49 +116,45 @@ void read_cart_ram_file(const char *save_file_name, uint8_t **dest,
 	}
 
 	/* Allocate enough memory to hold save file. */
-	if((*dest = SDL_malloc(len)) == NULL)
+	if((*dest = malloc(len)) == NULL)
 	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"%d: %s", __LINE__, SDL_GetError());
+		fprintf(stderr, "line %d\n", __LINE__);
 		exit(EXIT_FAILURE);
 	}
 
-	f = SDL_RWFromFile(save_file_name, "rb");
+	f = fopen(save_file_name, "rb");
 
 	/* It doesn't matter if the save file doesn't exist. We initialise the
 	 * save memory allocated above. The save file will be created on exit. */
 	if(f == NULL)
 	{
-		SDL_memset(*dest, 0, len);
+		memset(*dest, 0, len);
 		return;
 	}
 
 	/* Read save file to allocated memory. */
-	SDL_RWread(f, *dest, sizeof(uint8_t), len);
-	SDL_RWclose(f);
+	fread(*dest, sizeof(uint8_t), len, f);
+	fclose(f);
 }
 
 void write_cart_ram_file(const char *save_file_name, uint8_t **dest,
 			 const size_t len)
 {
-	SDL_RWops *f;
+	// FILE *f;
 
-	if(len == 0 || *dest == NULL)
-		return;
+	// if(len == 0 || *dest == NULL)
+	// 	return;
 
-	if((f = SDL_RWFromFile(save_file_name, "wb")) == NULL)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Unable to open save file: %s",
-				SDL_GetError());
-		return;
-	}
+	// if((f = fopen(save_file_name, "wb")) == NULL)
+	// {
+	// 	fprintf(stderr, "Unable to open save file\n");
+	// 	return;
+	// }
 
-	/* Record save file. */
-	SDL_RWwrite(f, *dest, sizeof(uint8_t), len);
-	SDL_RWclose(f);
+	// /* Record save file. */
+	// fwrite(*dest, sizeof(uint8_t), len, f);
+	JS_saveFile(save_file_name, *dest, len);
+	// fclose(f);
 
 	return;
 }
@@ -181,27 +184,25 @@ void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t addr
 	{
 		uint32_t rom_addr;
 		rom_addr = (uint32_t)addr * (uint32_t)gb->selected_rom_bank;
-		SDL_snprintf(location, sizeof(location),
+		snprintf(location, sizeof(location),
 			" (bank %d mode %d, file offset %u)",
 			gb->selected_rom_bank, gb->cart_mode_select, rom_addr);
 	}
 
 	instr_byte = __gb_read(gb, addr);
 
-	SDL_snprintf(error_msg, sizeof(error_msg),
+	snprintf(error_msg, sizeof(error_msg),
 		"Error: %s at 0x%04X%s with instruction %02X.\n"
 		"Cart RAM saved to recovery.sav\n"
 		"Exiting.\n",
 		gb_err_str[gb_err], addr, location, instr_byte);
-	SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-			SDL_LOG_PRIORITY_CRITICAL,
-			"%s", error_msg);
+	fprintf(stderr, "%s\n", error_msg);
 
-	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", error_msg, priv->win);
+	JS_alert(error_msg);
 
 	/* Free memory and then exit. */
-	SDL_free(priv->cart_ram);
-	SDL_free(priv->rom);
+	free(priv->cart_ram);
+	free(priv->rom);
 	exit(EXIT_FAILURE);
 }
 
@@ -374,9 +375,7 @@ void auto_assign_palette(struct priv_t *priv, uint8_t game_checksum)
 			{ 0x7FFF, 0x5294, 0x294A, 0x0000 },
 			{ 0x7FFF, 0x5294, 0x294A, 0x0000 }
 		};
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_INFO,
-				"No palette found for 0x%02X.", game_checksum);
+		printf("No palette found for 0x%02X.\n", game_checksum);
 		memcpy(priv->selected_palette, palette, palette_bytes);
 	}
 	}
@@ -584,15 +583,19 @@ int save_lcd_bmp(struct gb_s* gb, uint16_t fb[LCD_HEIGHT][LCD_WIDTH])
 	static uint_fast32_t file_num = 0;
 	char file_name[32];
 	char title_str[16];
-	SDL_RWops *f;
+	FILE *f;
 	int ret = -1;
 
-	SDL_snprintf(file_name, 32, "%.16s_%010ld.bmp",
+	snprintf(file_name, 32, "%.16s_%010u.bmp",
 		 gb_get_rom_name(gb, title_str), file_num);
 
-	f = SDL_RWFromFile(file_name, "wb");
+	f = fopen(file_name, "wb");
 	if(f == NULL)
+#ifdef __XCC
+		return ret;
+#else
 		goto ret;
+#endif
 
 	const uint8_t bmp_hdr_rgb555[] = {
 		0x42, 0x4d, 0x36, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -603,9 +606,9 @@ int save_lcd_bmp(struct gb_s* gb, uint16_t fb[LCD_HEIGHT][LCD_WIDTH])
 		0x00, 0x00, 0x00, 0x00
 	};
 
-	SDL_RWwrite(f, bmp_hdr_rgb555, sizeof(uint8_t), sizeof(bmp_hdr_rgb555));
-	SDL_RWwrite(f, fb, sizeof(uint16_t), LCD_HEIGHT * LCD_WIDTH);
-	ret = SDL_RWclose(f);
+	fwrite(bmp_hdr_rgb555, sizeof(uint8_t), sizeof(bmp_hdr_rgb555), f);
+	fwrite(fb, sizeof(uint16_t), LCD_HEIGHT * LCD_WIDTH, f);
+	ret = fclose(f);
 
 	file_num++;
 
@@ -616,90 +619,23 @@ ret:
 int main(int argc, char **argv)
 {
 	struct gb_s gb;
-	struct priv_t priv =
-	{
-		.rom = NULL,
-		.cart_ram = NULL
-	};
 	const double target_speed_ms = 1000.0 / VERTICAL_SYNC;
 	double speed_compensation = 0.0;
-	SDL_Window *window;
-	SDL_Renderer *renderer;
-	SDL_Texture *texture;
-	SDL_Event event;
-	SDL_GameController *controller = NULL;
 	uint_fast32_t new_ticks, old_ticks;
 	enum gb_init_error_e gb_ret;
-	unsigned int fast_mode = 1;
 	unsigned int fast_mode_timer = 1;
-	/* Record save file every 60 seconds. */
-	int save_timer = 60;
 	/* Must be freed */
 	char *rom_file_name = NULL;
 	char *save_file_name = NULL;
 	int ret = EXIT_SUCCESS;
 
-	SDL_LogSetPriority(LOG_CATERGORY_PEANUTSDL, SDL_LOG_PRIORITY_INFO);
-
-	/* Enable Hi-DPI to stop blurry game image. */
-#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
-	SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-#endif
-
-	/* Initialise frontend implementation, in this case, SDL2. */
-	if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) < 0)
-	{
-		char buf[128];
-		SDL_snprintf(buf, sizeof(buf),
-				"Unable to initialise SDL2: %s", SDL_GetError());
-		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", buf, NULL);
-		ret = EXIT_FAILURE;
-		goto out;
-	}
-
-	window = SDL_CreateWindow("Peanut-SDL: Opening File",
-			SDL_WINDOWPOS_CENTERED,
-			SDL_WINDOWPOS_CENTERED,
-			LCD_WIDTH * 2, LCD_HEIGHT * 2,
-			SDL_WINDOW_RESIZABLE | SDL_WINDOW_INPUT_FOCUS);
-
-	if(window == NULL)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Could not create window: %s",
-				SDL_GetError());
-		ret = EXIT_FAILURE;
-		goto out;
-	}
-	priv.win = window;
+	/* Initialise frontend implementation, in this case, JS. */
+	JS_createCanvas(LCD_WIDTH, LCD_HEIGHT);
+	JS_setTitle("Peanut-GB: Opening File");
+	JS_addKeyEventListener(&gb, onkey);
 
 	switch(argc)
 	{
-	case 1:
-		SDL_SetWindowTitle(window, "Drag and drop ROM");
-		do
-		{
-			SDL_Delay(10);
-			SDL_PollEvent(&event);
-
-			switch(event.type)
-			{
-				case SDL_DROPFILE:
-					rom_file_name = event.drop.file;
-					break;
-
-				case SDL_QUIT:
-					ret = EXIT_FAILURE;
-					goto out;
-
-				default:
-					break;
-			}
-		} while(rom_file_name == NULL);
-
-		break;
-
 	case 2:
 		/* Apply file name to rom_file_name
 		 * Set save_file_name to NULL. */
@@ -714,33 +650,35 @@ int main(int argc, char **argv)
 		break;
 
 	default:
-#if ENABLE_FILE_GUI
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Usage: %s [ROM] [SAVE]", argv[0]);
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"A file picker is presented if ROM is not given.");
-#else
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Usage: %s ROM [SAVE]\n", argv[0]);
-#endif
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"SAVE is set by default if not provided.");
-		ret = EXIT_FAILURE;
-		goto out;
+		fprintf(stderr, "Usage: %s [ROM] [SAVE]\n", argv[0]);
+		fprintf(stderr, "A file picker is presented if ROM is not given.\n");
+		fprintf(stderr, "SAVE is set by default if not provided.\n");
+
+	    JS_setFont("bold 16px Roboto");
+	    JS_fillStyle("white");
+
+	    char buf[UINT8_MAX];
+	    const char ext[] = ".gb";
+	    snprintf(buf, sizeof(buf), "Click to browse... (%s)", ext); // TODO maybe gbc if peanut merges it to main
+	    JS_fillText(buf, (LCD_WIDTH - JS_measureTextWidth(buf)) / 2, LCD_HEIGHT / 2);
+
+	    uint8_t *file = JS_openFilePicker(&rom_file_name, NULL, ext);
+	    if (!file) {
+			fprintf(stderr, "line %d\n", __LINE__);
+			ret = EXIT_FAILURE;
+			goto out;
+	    }
+	    priv.rom = file;
 	}
 
 	/* Copy input ROM file to allocated memory. */
-	if((priv.rom = SDL_LoadFile(rom_file_name, NULL)) == NULL)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"%d: %s", __LINE__, SDL_GetError());
-		ret = EXIT_FAILURE;
-		goto out;
+	if (argc == 2 || argc == 3) {
+		priv.rom = load_file(rom_file_name, NULL);
+		if (!priv.rom) {
+			fprintf(stderr, "line %d\n", __LINE__);
+			ret = EXIT_FAILURE;
+			goto out;
+		}
 	}
 
 	/* If no save file is specified, copy save file (with specific name) to
@@ -752,14 +690,12 @@ int main(int argc, char **argv)
 
 		/* Allocate enough space for the ROM file name, for the "sav"
 		 * extension and for the null terminator. */
-		save_file_name = SDL_malloc(
-				SDL_strlen(rom_file_name) + SDL_strlen(extension) + 1);
+		save_file_name = malloc(
+				strlen(rom_file_name) + strlen(extension) + 1);
 
 		if(save_file_name == NULL)
 		{
-			SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-					SDL_LOG_PRIORITY_CRITICAL,
-					"%d: %s", __LINE__, SDL_GetError());
+			fprintf(stderr, "line %d\n", __LINE__);
 			ret = EXIT_FAILURE;
 			goto out;
 		}
@@ -792,39 +728,39 @@ int main(int argc, char **argv)
 		break;
 
 	case GB_INIT_CARTRIDGE_UNSUPPORTED:
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Unsupported cartridge.");
+		fprintf(stderr, "Unsupported cartridge.\n");
 		ret = EXIT_FAILURE;
+#ifdef __XCC
+		return ret;
+#else
 		goto out;
+#endif
 
 	case GB_INIT_INVALID_CHECKSUM:
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Invalid ROM: Checksum failure.");
+		fprintf(stderr, "Invalid ROM: Checksum failure.\n");
 		ret = EXIT_FAILURE;
+#ifdef __XCC
+		return ret;
+#else
 		goto out;
+#endif
 
 	default:
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Unknown error: %d", gb_ret);
+		fprintf(stderr, "Unknown error: %d\n", gb_ret);
 		ret = EXIT_FAILURE;
+#ifdef __XCC
+		return ret;
+#else
 		goto out;
+#endif
 	}
 
 	/* Copy dmg_boot.bin boot ROM file to allocated memory. */
-	if((priv.bootrom = SDL_LoadFile("dmg_boot.bin", NULL)) == NULL)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_INFO,
-				"No dmg_boot.bin file found; disabling boot ROM");
-	}
-	else
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_INFO,
-				"boot ROM enabled");
+	priv.bootrom = load_file("dmg_boot.bin", NULL);
+	if (!priv.bootrom) {
+		printf("No dmg_boot.bin file found; disabling boot ROM\n");
+	} else {
+		printf("boot ROM enabled\n");
 		gb_set_bootrom(&gb, gb_bootrom_read);
 		gb_reset(&gb);
 	}
@@ -832,10 +768,7 @@ int main(int argc, char **argv)
 	/* Load Save File. */
 	if(gb_get_save_size_s(&gb, &priv.save_size) < 0)
 	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Unable to get save size: %s",
-				SDL_GetError());
+		fprintf(stderr, "Unable to get save size\n");
 		ret = EXIT_FAILURE;
 		goto out;
 	}
@@ -878,41 +811,30 @@ int main(int argc, char **argv)
 #endif
 	}
 
-#if ENABLE_SOUND
-	SDL_AudioDeviceID dev;
-#endif
-
 #if ENABLE_SOUND == 0
 	// Sound is disabled, so do nothing.
 #elif defined(ENABLE_SOUND_BLARGG)
 	audio_init(&dev);
 #elif defined(ENABLE_SOUND_MINIGB)
 	{
-		SDL_AudioSpec want, have;
+		// SDL_AudioSpec want, have;
 
-		want.freq = AUDIO_SAMPLE_RATE;
-		want.format   = AUDIO_S16,
-		want.channels = 2;
-		want.samples = AUDIO_SAMPLES;
-		want.callback = audio_callback;
-		want.userdata = NULL;
+		// want.freq = AUDIO_SAMPLE_RATE;
+		// want.format   = AUDIO_S16,
+		// want.channels = 2;
+		// want.samples = AUDIO_SAMPLES;
+		// want.callback = audio_callback;
+		// want.userdata = NULL;
 
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_INFO,
-				"Audio driver: %s",
-				SDL_GetAudioDeviceName(0, 0));
+		// printf("Audio driver: %s\n", SDL_GetAudioDeviceName(0, 0));
 
-		if((dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0)) == 0)
-		{
-			SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-					SDL_LOG_PRIORITY_CRITICAL,
-					"SDL could not open audio device: %s",
-					SDL_GetError());
-			exit(EXIT_FAILURE);
-		}
+		// if((dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0)) == 0)
+		// {
+		// 	fprintf(stderr, "SDL could not open audio device\n");
+		// 	exit(EXIT_FAILURE);
+		// }
 
 		minigb_apu_audio_init(&apu);
-		SDL_PauseAudioDevice(dev, 0);
 	}
 #endif
 
@@ -920,396 +842,51 @@ int main(int argc, char **argv)
 	gb_init_lcd(&gb, &lcd_draw_line);
 #endif
 
-	/* Allow the joystick input even if game is in background. */
-	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-
-	if(SDL_GameControllerAddMappingsFromFile("gamecontrollerdb.txt") < 0)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_INFO,
-				"Unable to assign joystick mappings: %s\n",
-				SDL_GetError());
-	}
-
 	/* Open the first available controller. */
-	for(int i = 0; i < SDL_NumJoysticks(); i++)
+	// for(int i = 0; i < SDL_NumJoysticks(); i++)
+	// {
+	// 	if(!SDL_IsGameController(i))
+	// 		continue;
+
+	// 	controller = SDL_GameControllerOpen(i);
+
+	// 	if(controller)
+	// 	{
+	// 		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
+	// 				SDL_LOG_PRIORITY_INFO,
+	// 				"Game Controller %s connected.",
+	// 				SDL_GameControllerName(controller));
+	// 		break;
+	// 	}
+	// 	else
+	// 	{
+	// 		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
+	// 				SDL_LOG_PRIORITY_INFO,
+	// 				"Could not open game controller %i: %s\n",
+	// 				i, SDL_GetError());
+	// 	}
+	// }
+
 	{
-		if(!SDL_IsGameController(i))
-			continue;
-
-		controller = SDL_GameControllerOpen(i);
-
-		if(controller)
-		{
-			SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-					SDL_LOG_PRIORITY_INFO,
-					"Game Controller %s connected.",
-					SDL_GameControllerName(controller));
-			break;
-		}
-		else
-		{
-			SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-					SDL_LOG_PRIORITY_INFO,
-					"Could not open game controller %i: %s\n",
-					i, SDL_GetError());
-		}
+		/* 11 for "Peanut-GB: " and a maximum of 16 for the title. */
+		char title_str[27] = "Peanut-GB: ";
+		gb_get_rom_name(&gb, title_str + strlen(title_str));
+		printf("%s\n", title_str);
+		JS_setTitle(title_str);
 	}
 
-	{
-		/* 12 for "Peanut-SDL: " and a maximum of 16 for the title. */
-		char title_str[28] = "Peanut-SDL: ";
-		gb_get_rom_name(&gb, title_str + 12);
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_INFO,
-				"%s",
-				title_str);
-		SDL_SetWindowTitle(window, title_str);
-	}
-
-	SDL_SetWindowMinimumSize(window, LCD_WIDTH, LCD_HEIGHT);
-
-	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC);
-	if(renderer == NULL)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Could not create renderer: %s",
-				SDL_GetError());
-		ret = EXIT_FAILURE;
-		goto out;
-	}
-
-	if(SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255) < 0)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Renderer could not draw color: %s",
-				SDL_GetError());
-		ret = EXIT_FAILURE;
-		goto out;
-	}
-
-	if(SDL_RenderClear(renderer) < 0)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Renderer could not clear: %s",
-				SDL_GetError());
-		ret = EXIT_FAILURE;
-		goto out;
-	}
-
-	SDL_RenderPresent(renderer);
-
-	/* Use integer scale. */
-	SDL_RenderSetLogicalSize(renderer, LCD_WIDTH, LCD_HEIGHT);
-	SDL_RenderSetIntegerScale(renderer, 1);
-
-	texture = SDL_CreateTexture(renderer,
-				    SDL_PIXELFORMAT_RGB555,
-				    SDL_TEXTUREACCESS_STREAMING,
-				    LCD_WIDTH, LCD_HEIGHT);
-
-	if(texture == NULL)
-	{
-		SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-				SDL_LOG_PRIORITY_CRITICAL,
-				"Texture could not be created: %s",
-				SDL_GetError());
-		ret = EXIT_FAILURE;
-		goto out;
-	}
+	JS_requestAnimationFrame();
 
 	auto_assign_palette(&priv, gb_colour_hash(&gb));
 
-	while(SDL_QuitRequested() == SDL_FALSE)
+	while(!quit)
 	{
 		int delay;
 		static double rtc_timer = 0;
-		static unsigned int selected_palette = 3;
-		static unsigned int dump_bmp = 0;
 
 		/* Calculate the time taken to draw frame, then later add a
 		 * delay to cap at 60 fps. */
-		old_ticks = SDL_GetTicks();
-
-		/* Get joypad input. */
-		while(SDL_PollEvent(&event))
-		{
-			static int fullscreen = 0;
-
-			switch(event.type)
-			{
-			case SDL_QUIT:
-				goto quit;
-
-			case SDL_CONTROLLERBUTTONDOWN:
-				switch(event.cbutton.button)
-				{
-				case SDL_CONTROLLER_BUTTON_A:
-					gb.direct.joypad &= ~JOYPAD_A;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_B:
-					gb.direct.joypad &= ~JOYPAD_B;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_BACK:
-					gb.direct.joypad &= ~JOYPAD_SELECT;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_START:
-					gb.direct.joypad &= ~JOYPAD_START;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_UP:
-					gb.direct.joypad &= ~JOYPAD_UP;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-					gb.direct.joypad &= ~JOYPAD_RIGHT;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-					gb.direct.joypad &= ~JOYPAD_DOWN;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-					gb.direct.joypad &= ~JOYPAD_LEFT;
-					break;
-				}
-
-				break;
-
-			case SDL_CONTROLLERBUTTONUP:
-				switch(event.cbutton.button)
-				{
-				case SDL_CONTROLLER_BUTTON_A:
-					gb.direct.joypad |= JOYPAD_A;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_B:
-					gb.direct.joypad |= JOYPAD_B;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_BACK:
-					gb.direct.joypad |= JOYPAD_SELECT;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_START:
-					gb.direct.joypad |= JOYPAD_START;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_UP:
-					gb.direct.joypad |= JOYPAD_UP;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-					gb.direct.joypad |= JOYPAD_RIGHT;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-					gb.direct.joypad |= JOYPAD_DOWN;
-					break;
-
-				case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-					gb.direct.joypad |= JOYPAD_LEFT;
-					break;
-				}
-
-				break;
-
-			case SDL_KEYDOWN:
-				switch(event.key.keysym.sym)
-				{
-				case SDLK_RETURN:
-					gb.direct.joypad &= ~JOYPAD_START;
-					break;
-
-				case SDLK_BACKSPACE:
-					gb.direct.joypad &= ~JOYPAD_SELECT;
-					break;
-
-				case SDLK_z:
-					gb.direct.joypad &= ~JOYPAD_A;
-					break;
-
-				case SDLK_x:
-					gb.direct.joypad &= ~JOYPAD_B;
-					break;
-
-				case SDLK_a:
-					gb.direct.joypad ^= JOYPAD_A;
-					break;
-
-				case SDLK_s:
-					gb.direct.joypad ^= JOYPAD_B;
-					break;
-
-				case SDLK_UP:
-					gb.direct.joypad &= ~JOYPAD_UP;
-					break;
-
-				case SDLK_RIGHT:
-					gb.direct.joypad &= ~JOYPAD_RIGHT;
-					break;
-
-				case SDLK_DOWN:
-					gb.direct.joypad &= ~JOYPAD_DOWN;
-					break;
-
-				case SDLK_LEFT:
-					gb.direct.joypad &= ~JOYPAD_LEFT;
-					break;
-
-				case SDLK_SPACE:
-					fast_mode = 2;
-					break;
-
-				case SDLK_1:
-					fast_mode = 1;
-					break;
-
-				case SDLK_2:
-					fast_mode = 2;
-					break;
-
-				case SDLK_3:
-					fast_mode = 3;
-					break;
-
-				case SDLK_4:
-					fast_mode = 4;
-					break;
-
-				case SDLK_r:
-					gb_reset(&gb);
-					break;
-#if ENABLE_LCD
-
-				case SDLK_i:
-					gb.direct.interlace = !gb.direct.interlace;
-					break;
-
-				case SDLK_o:
-					gb.direct.frame_skip = !gb.direct.frame_skip;
-					break;
-
-				case SDLK_b:
-					dump_bmp = ~dump_bmp;
-
-					if(dump_bmp)
-						SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-								SDL_LOG_PRIORITY_INFO,
-								"Dumping frames");
-					else
-						SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-								SDL_LOG_PRIORITY_INFO,
-								"Stopped dumping frames");
-
-					break;
-#endif
-
-				case SDLK_p:
-					if(event.key.keysym.mod == KMOD_LSHIFT)
-					{
-						auto_assign_palette(&priv, gb_colour_hash(&gb));
-						break;
-					}
-
-					if(++selected_palette == NUMBER_OF_PALETTES)
-						selected_palette = 0;
-
-					manual_assign_palette(&priv, selected_palette);
-					break;
-				}
-
-				break;
-
-			case SDL_KEYUP:
-				switch(event.key.keysym.sym)
-				{
-				case SDLK_RETURN:
-					gb.direct.joypad |= JOYPAD_START;
-					break;
-
-				case SDLK_BACKSPACE:
-					gb.direct.joypad |= JOYPAD_SELECT;
-					break;
-
-				case SDLK_z:
-					gb.direct.joypad |= JOYPAD_A;
-					break;
-
-				case SDLK_x:
-					gb.direct.joypad |= JOYPAD_B;
-					break;
-
-				case SDLK_a:
-					gb.direct.joypad |= JOYPAD_A;
-					break;
-
-				case SDLK_s:
-					gb.direct.joypad |= JOYPAD_B;
-					break;
-
-				case SDLK_UP:
-					gb.direct.joypad |= JOYPAD_UP;
-					break;
-
-				case SDLK_RIGHT:
-					gb.direct.joypad |= JOYPAD_RIGHT;
-					break;
-
-				case SDLK_DOWN:
-					gb.direct.joypad |= JOYPAD_DOWN;
-					break;
-
-				case SDLK_LEFT:
-					gb.direct.joypad |= JOYPAD_LEFT;
-					break;
-
-				case SDLK_SPACE:
-					fast_mode = 1;
-					break;
-
-				case SDLK_f:
-					if(fullscreen)
-					{
-						SDL_SetWindowFullscreen(window, 0);
-						fullscreen = 0;
-						SDL_ShowCursor(SDL_ENABLE);
-					}
-					else
-					{
-						SDL_SetWindowFullscreen(window,		SDL_WINDOW_FULLSCREEN_DESKTOP);
-						fullscreen = SDL_WINDOW_FULLSCREEN_DESKTOP;
-						SDL_ShowCursor(SDL_DISABLE);
-					}
-					break;
-
-				case SDLK_F11:
-				{
-					if(fullscreen)
-					{
-						SDL_SetWindowFullscreen(window, 0);
-						fullscreen = 0;
-						SDL_ShowCursor(SDL_ENABLE);
-					}
-					else
-					{
-						SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
-						fullscreen = SDL_WINDOW_FULLSCREEN;
-						SDL_ShowCursor(SDL_DISABLE);
-					}
-				}
-				break;
-				}
-
-				break;
-			}
-		}
+		old_ticks = JS_performanceNow();
 
 		/* Execute CPU cycles until the screen has to be redrawn. */
 		gb_run_frame(&gb);
@@ -1320,7 +897,6 @@ int main(int argc, char **argv)
 		if(rtc_timer >= 1000.0)
 		{
 			rtc_timer -= 1000.0;
-			gb_tick_rtc(&gb);
 		}
 
 		/* Skip frames during fast mode. */
@@ -1341,30 +917,36 @@ int main(int argc, char **argv)
 
 #if ENABLE_LCD
 		/* Copy frame buffer to SDL screen. */
-		SDL_UpdateTexture(texture, NULL, &priv.fb, LCD_WIDTH * sizeof(uint16_t));
-		SDL_RenderClear(renderer);
-		SDL_RenderCopy(renderer, texture, NULL, NULL);
-		SDL_RenderPresent(renderer);
+		for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
+		    uint16_t p = priv.fb[0][i];
+
+			uint8_t r = (p >> 10) & 0x1F;
+			uint8_t g = (p >> 5)  & 0x1F;
+			uint8_t b = p         & 0x1F;
+
+		    r = (r << 3) | (r >> 2);
+		    g = (g << 3) | (g >> 2);
+		    b = (b << 3) | (b >> 2);
+
+		    pixels[i] = (b << 16) | (g << 8) | r;
+		}
+		JS_setPixels(pixels);
+		JS_requestAnimationFrame();
 
 		if(dump_bmp)
 		{
 			if(save_lcd_bmp(&gb, priv.fb) != 0)
 			{
-				SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-					       SDL_LOG_PRIORITY_ERROR,
-					       "Failure dumping frame: %s",
-					       SDL_GetError());
+				fprintf(stderr, "Failure dumping frame\n");
 				dump_bmp = 0;
-				SDL_LogMessage(LOG_CATERGORY_PEANUTSDL,
-					       SDL_LOG_PRIORITY_INFO,
-					       "Stopped dumping frames");
+				printf("Stopped dumping frames\n");
 			}
 		}
 
 #endif
 
 		/* Use a delay that will draw the screen at a rate of 59.7275 Hz. */
-		new_ticks = SDL_GetTicks();
+		new_ticks = JS_performanceNow();
 
 		/* Since we can only delay for a maximum resolution of 1ms, we
 		 * can accumulate the error and compensate for the delay
@@ -1383,7 +965,7 @@ int main(int argc, char **argv)
 		/* Only run delay logic if required. */
 		if(delay > 0)
 		{
-			uint_fast32_t delay_ticks = SDL_GetTicks();
+			uint_fast32_t delay_ticks = JS_performanceNow();
 			uint_fast32_t after_delay_ticks;
 
 			/* Tick the internal RTC when 1 second has passed. */
@@ -1392,50 +974,19 @@ int main(int argc, char **argv)
 			if(rtc_timer >= 1000)
 			{
 				rtc_timer -= 1000;
-				gb_tick_rtc(&gb);
-
-				/* If 60 seconds has passed, record save file.
-				 * We do this because the blarrg audio library
-				 * used contains asserts that will abort the
-				 * program without save.
-				 * TODO: Remove all workarounds due to faulty
-				 * external libraries. */
-				--save_timer;
-
-				if(!save_timer)
-				{
-#if ENABLE_SOUND_BLARGG
-					/* Locking the audio thread to reduce
-					 * possibility of abort during save. */
-					SDL_LockAudioDevice(dev);
-#endif
-					write_cart_ram_file(save_file_name,
-						&priv.cart_ram,
-						priv.save_size);
-#if ENABLE_SOUND_BLARGG
-					SDL_UnlockAudioDevice(dev);
-#endif
-					save_timer = 60;
-				}
 			}
 
 			/* This will delay for at least the number of
 			 * milliseconds requested, so we have to compensate for
 			 * error here too. */
-			SDL_Delay(delay);
+			JS_setTimeout(delay);
 
-			after_delay_ticks = SDL_GetTicks();
+			after_delay_ticks = JS_performanceNow();
 			speed_compensation += (double)delay -
 					      (int)(after_delay_ticks - delay_ticks);
 		}
 	}
 
-quit:
-	SDL_DestroyRenderer(renderer);
-	SDL_DestroyWindow(window);
-	SDL_DestroyTexture(texture);
-	SDL_GameControllerClose(controller);
-	SDL_Quit();
 #ifdef ENABLE_SOUND_BLARGG
 	audio_cleanup();
 #endif
@@ -1444,16 +995,274 @@ quit:
 	write_cart_ram_file(save_file_name, &priv.cart_ram, priv.save_size);
 
 out:
-	SDL_free(priv.rom);
-	SDL_free(priv.cart_ram);
+	free(priv.rom);
+	free(priv.cart_ram);
 
 	/* If the save file name was automatically generated (which required memory
 	 * allocated on the help), then free it here. */
 	if(argc == 2)
-		SDL_free(save_file_name);
+		free(save_file_name);
 
 	if(argc == 1)
-		SDL_free(rom_file_name);
+		free(rom_file_name);
 
 	return ret;
+}
+
+// case SDL_CONTROLLERBUTTONDOWN:
+// 	switch(event.cbutton.button)
+// 	{
+// 	case SDL_CONTROLLER_BUTTON_A:
+// 		gb.direct.joypad &= ~JOYPAD_A;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_B:
+// 		gb.direct.joypad &= ~JOYPAD_B;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_BACK:
+// 		gb.direct.joypad &= ~JOYPAD_SELECT;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_START:
+// 		gb.direct.joypad &= ~JOYPAD_START;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_UP:
+// 		gb.direct.joypad &= ~JOYPAD_UP;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+// 		gb.direct.joypad &= ~JOYPAD_RIGHT;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+// 		gb.direct.joypad &= ~JOYPAD_DOWN;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+// 		gb.direct.joypad &= ~JOYPAD_LEFT;
+// 		break;
+// 	}
+
+// 	break;
+
+// case SDL_CONTROLLERBUTTONUP:
+// 	switch(event.cbutton.button)
+// 	{
+// 	case SDL_CONTROLLER_BUTTON_A:
+// 		gb.direct.joypad |= JOYPAD_A;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_B:
+// 		gb.direct.joypad |= JOYPAD_B;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_BACK:
+// 		gb.direct.joypad |= JOYPAD_SELECT;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_START:
+// 		gb.direct.joypad |= JOYPAD_START;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_UP:
+// 		gb.direct.joypad |= JOYPAD_UP;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+// 		gb.direct.joypad |= JOYPAD_RIGHT;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+// 		gb.direct.joypad |= JOYPAD_DOWN;
+// 		break;
+
+// 	case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+// 		gb.direct.joypad |= JOYPAD_LEFT;
+// 		break;
+// 	}
+
+// 	break;
+
+/* Get joypad input. */
+static bool onkey(void *userdata, bool pressed, int key, int code, int modifiers) {
+    (void)key, (void)modifiers;
+	struct gb_s *gb = (struct gb_s*)userdata;
+	if (pressed) {
+		switch(code)
+		{
+		case DOM_PK_ESCAPE:
+			quit = true;
+			break;
+
+		case DOM_PK_ENTER:
+			gb->direct.joypad &= ~JOYPAD_START;
+			break;
+
+		case DOM_PK_BACKSPACE:
+			gb->direct.joypad &= ~JOYPAD_SELECT;
+			break;
+
+		case DOM_PK_Z:
+			gb->direct.joypad &= ~JOYPAD_A;
+			break;
+
+		case DOM_PK_X:
+			gb->direct.joypad &= ~JOYPAD_B;
+			break;
+
+		case DOM_PK_A:
+			gb->direct.joypad ^= JOYPAD_A;
+			break;
+
+		case DOM_PK_S:
+			gb->direct.joypad ^= JOYPAD_B;
+			break;
+
+		case DOM_PK_ARROW_UP:
+			gb->direct.joypad &= ~JOYPAD_UP;
+			break;
+
+		case DOM_PK_ARROW_RIGHT:
+			gb->direct.joypad &= ~JOYPAD_RIGHT;
+			break;
+
+		case DOM_PK_ARROW_DOWN:
+			gb->direct.joypad &= ~JOYPAD_DOWN;
+			break;
+
+		case DOM_PK_ARROW_LEFT:
+			gb->direct.joypad &= ~JOYPAD_LEFT;
+			break;
+
+		case DOM_PK_SPACE:
+			fast_mode = 2;
+			break;
+
+		case DOM_PK_1:
+			fast_mode = 1;
+			break;
+
+		case DOM_PK_2:
+			fast_mode = 2;
+			break;
+
+		case DOM_PK_3:
+			fast_mode = 3;
+			break;
+
+		case DOM_PK_4:
+			fast_mode = 4;
+			break;
+
+		case DOM_PK_R:
+			gb_reset(gb);
+			break;
+#if ENABLE_LCD
+
+		case DOM_PK_I:
+			gb->direct.interlace = !gb->direct.interlace;
+			break;
+
+		case DOM_PK_O:
+			gb->direct.frame_skip = !gb->direct.frame_skip;
+			break;
+
+		case DOM_PK_B:
+			dump_bmp = ~dump_bmp;
+
+			if(dump_bmp)
+				printf("Dumping frames\n");
+			else
+				printf("Stopped dumping frames\n");
+
+			break;
+#endif
+
+		case DOM_PK_P:
+			if(modifiers & KMOD_SHIFT)
+			{
+				auto_assign_palette(&priv, gb_colour_hash(gb));
+				break;
+			}
+
+			if(++selected_palette == NUMBER_OF_PALETTES)
+				selected_palette = 0;
+
+			manual_assign_palette(&priv, selected_palette);
+			break;
+		}
+	} else {
+		switch(code)
+		{
+		case DOM_PK_ENTER:
+			gb->direct.joypad |= JOYPAD_START;
+			break;
+
+		case DOM_PK_BACKSPACE:
+			gb->direct.joypad |= JOYPAD_SELECT;
+			break;
+
+		case DOM_PK_Z:
+			gb->direct.joypad |= JOYPAD_A;
+			break;
+
+		case DOM_PK_X:
+			gb->direct.joypad |= JOYPAD_B;
+			break;
+
+		case DOM_PK_A:
+			gb->direct.joypad |= JOYPAD_A;
+			break;
+
+		case DOM_PK_S:
+			gb->direct.joypad |= JOYPAD_B;
+			break;
+
+		case DOM_PK_ARROW_UP:
+			gb->direct.joypad |= JOYPAD_UP;
+			break;
+
+		case DOM_PK_ARROW_RIGHT:
+			gb->direct.joypad |= JOYPAD_RIGHT;
+			break;
+
+		case DOM_PK_ARROW_DOWN:
+			gb->direct.joypad |= JOYPAD_DOWN;
+			break;
+
+		case DOM_PK_ARROW_LEFT:
+			gb->direct.joypad |= JOYPAD_LEFT;
+			break;
+
+		case DOM_PK_SPACE:
+			fast_mode = 1;
+			break;
+		}
+    }
+
+    if (code == DOM_PK_F12) {
+        return 0;
+    }
+    return 1;
+}
+uint8_t *load_file(const char* file, size_t *datasize) {
+	FILE *f = fopen(file, "rb");
+	if (!f) {
+		return NULL;
+	}
+
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	rewind(f);
+
+	if (datasize) {
+		*datasize = size;
+	}
+
+	void *buffer = malloc(size);
+	fread(buffer, 1, size, f);
+	fclose(f);
+	return buffer;
 }

@@ -4,7 +4,6 @@ COMPANY		:= Deltabeard
 COPYRIGHT	:= Copyright (c) 2020 Mahyar Koshkouei
 LICENSE_SPDX	:= MIT
 
-
 CPPFLAGS := -DCOMPANY=Deltabeard		\
 	-DDESCRIPTION="$(DESCRIPTION)"		\
 	-DLICENSE="$(LICENSE_SPDX)"		\
@@ -12,22 +11,27 @@ CPPFLAGS := -DCOMPANY=Deltabeard		\
 	-DICON_FILE=./meta/icon.ico		\
 	-DENABLE_SOUND -DENABLE_SOUND_MINIGB -DMINIGB_APU_AUDIO_FORMAT_S16SYS
 
-OPT := -O2 -Wall -Wextra
-CFLAGS := $(OPT) $(shell sdl2-config --cflags)
-LDLIBS := $(shell sdl2-config --libs)
+LIBC=../../../../wasmlite/libc
+WCC = ../../../../xcc/wcc
+CLANG = clang
 
-SOURCES := peanut_sdl.c minigb_apu/minigb_apu.c
-OBJECTS := peanut_sdl.o minigb_apu/minigb_apu.o
+DEBUG = 0
+OUT = peanut.wasm wcc-peanut.wasm
 
-ifeq ($(OS),Windows_NT)
-	OBJECTS += meta/winres.o
+ifeq ($(DEBUG),0)
+CFLAGS = -Oz -ffast-math -flto #-Wall -Wextra
+else
+CFLAGS = -g -Wall -Wextra
 endif
 
-all: peanut-sdl
-peanut-sdl: $(OBJECTS)
+SOURCES := peanut_sdl.c minigb_apu/minigb_apu.c
+
+peanut.wasm: CC = $(CLANG) --target=wasm32 --sysroot=$(LIBC) -Wl,--export-table -Wl,--export=malloc -nodefaultlibs -lc -Wl,--stack-first
+wcc-peanut.wasm: CC = $(WCC) -isystem=$(LIBC)/include -L$(LIBC)/lib -Wl,--export-table -e=malloc --stack-size=64000 -Dgoto=void*
+
+all: $(OUT) serve
+$(OUT): $(SOURCES)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $^ $(LDLIBS)
 
-peanut_sdl.o: peanut_sdl.c ../../peanut_gb.h
-
-meta/winres.o: meta/winres.rc
-	windres $(CPPFLAGS) $< $@
+serve:
+	esbuild --servedir=.

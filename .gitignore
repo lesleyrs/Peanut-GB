@@ -20,3 +20,5 @@ bin*/
 *.gb
 *.gbc
 *.bin
+*.zip
+*.wasm
