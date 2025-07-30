@@ -928,9 +928,9 @@ int main(int argc, char **argv)
 		    g = (g << 3) | (g >> 2);
 		    b = (b << 3) | (b >> 2);
 
-		    pixels[i] = (b << 16) | (g << 8) | r;
+		    pixels[i] = (0xFF << 24) | (b << 16) | (g << 8) | r;
 		}
-		JS_setPixels(pixels);
+		JS_setPixelsAlpha(pixels);
 		JS_requestAnimationFrame();
 
 		if(dump_bmp)

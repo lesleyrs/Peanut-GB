@@ -4,6 +4,7 @@ COMPANY		:= Deltabeard
 COPYRIGHT	:= Copyright (c) 2020 Mahyar Koshkouei
 LICENSE_SPDX	:= MIT
 
+
 CPPFLAGS := -DCOMPANY=Deltabeard		\
 	-DDESCRIPTION="$(DESCRIPTION)"		\
 	-DLICENSE="$(LICENSE_SPDX)"		\
