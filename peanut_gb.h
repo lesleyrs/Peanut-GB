@@ -623,16 +623,16 @@ struct gb_s
 
 	struct
 	{
-		int8_t gb_halt	: 1;
-		int8_t gb_ime	: 1;
+		bool gb_halt	: 1;
+		bool gb_ime	: 1;
 		/* gb_frame is set when 0.016742706298828125 seconds have
 		 * passed. It is likely that a new frame has been drawn since
 		 * then, but it is possible that the LCD was switched off and
 		 * nothing was drawn. */
-		int8_t gb_frame	: 1;
-		int8_t lcd_blank	: 1;
+		bool gb_frame	: 1;
+		bool lcd_blank	: 1;
 		/* Set if MBC3O cart is used. */
-		int8_t cart_is_mbc3O : 1;
+		bool cart_is_mbc3O : 1;
 	};
 
 	/* Cartridge information:
@@ -697,8 +697,8 @@ struct gb_s
 		uint8_t WY;
 
 		/* Only support 30fps frame skip. */
-		int8_t frame_skip_count : 1;
-		int8_t interlace_count : 1;
+		bool frame_skip_count : 1;
+		bool interlace_count : 1;
 	} display;
 
 	/**
@@ -713,8 +713,8 @@ struct gb_s
 		/* Set to enable interlacing. Interlacing will start immediately
 		 * (at the next line drawing).
 		 */
-		int8_t interlace : 1;
-		int8_t frame_skip : 1;
+		bool interlace : 1;
+		bool frame_skip : 1;
 
 		union
 		{
@@ -724,14 +724,14 @@ struct gb_s
 				 * portability concerns. It is recommended to
 				 * use the JOYPAD_* defines instead.
 				 */
-				int8_t a		: 1;
-				int8_t b		: 1;
-				int8_t select	: 1;
-				int8_t start	: 1;
-				int8_t right	: 1;
-				int8_t left	: 1;
-				int8_t up		: 1;
-				int8_t down	: 1;
+				bool a		: 1;
+				bool b		: 1;
+				bool select	: 1;
+				bool start	: 1;
+				bool right	: 1;
+				bool left	: 1;
+				bool up		: 1;
+				bool down	: 1;
 			} joypad_bits;
 			uint8_t joypad;
 		};
