@@ -630,7 +630,7 @@ int main(int argc, char **argv)
 	int ret = EXIT_SUCCESS;
 
 	/* Initialise frontend implementation, in this case, JS. */
-	JS_createCanvas(LCD_WIDTH, LCD_HEIGHT);
+	JS_createCanvas(LCD_WIDTH, LCD_HEIGHT, "2d");
 	JS_setTitle("Peanut-GB: Opening File");
 	JS_addKeyEventListener(&gb, onkey);
 
